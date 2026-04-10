@@ -1,0 +1,31 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - NOTEKING_LLM_API_KEY=${NOTEKING_LLM_API_KEY}
+      - NOTEKING_LLM_BASE_URL=${NOTEKING_LLM_BASE_URL:-}
+      - NOTEKING_LLM_MODEL=${NOTEKING_LLM_MODEL:-gpt-4o-mini}
+      - NOTEKING_PROXY=${NOTEKING_PROXY:-}
+      - BILIBILI_SESSDATA=${BILIBILI_SESSDATA:-}
+    volumes:
+      - noteking_cache:/app/.noteking/cache
+      - noteking_output:/app/noteking_output
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: ../Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  noteking_cache:
+  noteking_output:
