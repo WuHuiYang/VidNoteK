@@ -35,6 +35,18 @@
 
 ---
 
+## 📸 产品截图
+
+### 输入界面
+粘贴视频链接，选择输出模板，一键生成
+![输入界面](assets/screenshots/1-input-interface.png)
+
+### 生成结果
+支持 Markdown 预览、导出 PDF、一键复制
+![生成结果](assets/screenshots/2-result.png)
+
+---
+
 
 ### 13 种模板功能介绍
 
