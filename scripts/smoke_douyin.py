@@ -62,7 +62,6 @@ def main() -> int:
 
     text = subtitles.full_text.strip()
     print(f"source: {subtitles.source}", file=sys.stderr)
-    print(f"segments: {len(subtitles.segments)}", file=sys.stderr)
     print(f"cjk chars: {cjk_count(text)}", file=sys.stderr)
     preview = "\n".join(segment.text for segment in subtitles.segments[:12])
     print(preview)
@@ -72,7 +71,18 @@ def main() -> int:
         dest.parent.mkdir(parents=True, exist_ok=True)
         subtitles.save_txt(dest)
         subtitles.save_srt(dest.with_suffix(".srt"))
+        written = len(dest.read_text(encoding="utf-8").splitlines())
+        print(f"{written} lines via {subtitles.source}", file=sys.stderr)
         print(f"wrote {dest}", file=sys.stderr)
+        if written != len(subtitles.segments):
+            print(
+                f"Line count mismatch: file has {written} lines, "
+                f"{len(subtitles.segments)} segments",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        print(f"segments: {len(subtitles.segments)}", file=sys.stderr)
 
     if video_path.stat().st_size < 100_000 or cjk_count(text) < 8:
         print("Smoke check failed: video or transcript looks empty", file=sys.stderr)

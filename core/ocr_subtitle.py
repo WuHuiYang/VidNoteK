@@ -33,11 +33,14 @@ class OCRUnavailable(RuntimeError):
 
 
 def ocr_available() -> bool:
-    try:
-        import rapidocr_onnxruntime  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    """True when either RapidOCR 3.x or the older onnxruntime package imports."""
+    for name in ("rapidocr", "rapidocr_onnxruntime"):
+        try:
+            __import__(name)
+            return True
+        except ImportError:
+            continue
+    return False
 
 
 def ocr_burned_subtitles(
@@ -61,6 +64,8 @@ def ocr_burned_subtitles(
         samples = drop_watermark_lines(samples)
         duration = ffprobe_duration(video_path)
         segments = merge_ocr_samples(samples, interval, duration)
+        segments = dedupe_overlapping_captions(segments)
+        segments = _restore_finance_masks(segments, config)
         return SubtitleResult(segments=segments, source="ocr", language="zh")
 
     if work_dir is None:
@@ -145,8 +150,7 @@ def merge_ocr_samples(
             current, start, end, gap = text, timestamp, timestamp, 0
             continue
         if _similar(text, current):
-            if len(text) > len(current):
-                current = text
+            current = _prefer_caption(current, text)
             end = timestamp
             gap = 0
             continue
@@ -174,6 +178,69 @@ def drop_watermark_lines(
     return [(timestamp, "" if text in banned else text) for timestamp, text in samples]
 
 
+def dedupe_overlapping_captions(segments: list[SubtitleSegment]) -> list[SubtitleSegment]:
+    """Drop caption bleed copied from the neighboring line.
+
+    A transition frame often glues the previous line's last letter onto the
+    next caption (``爆C`` + ``主力建C`` becomes ``C主力建C``) or stores both
+    lines in one sample. Keep the real caption and the new one, not the join.
+    """
+    texts = [segment.text.strip() for segment in segments if segment.text and segment.text.strip()]
+    owners = [segment for segment in segments if segment.text and segment.text.strip()]
+    if not texts:
+        return []
+
+    index = 0
+    while index < len(texts) - 1:
+        current, nxt = texts[index], texts[index + 1]
+        if len(nxt) >= 2 and len(current) > len(nxt) and current.endswith(nxt):
+            remain = current[: -len(nxt)].strip("，。！？、 ")
+            if _keep_caption(remain):
+                texts[index] = remain
+            else:
+                del texts[index]
+                del owners[index]
+                continue
+        index += 1
+
+    cleaned_text: list[str] = []
+    cleaned_owners: list[SubtitleSegment] = []
+    for text, owner in zip(texts, owners):
+        if cleaned_text:
+            prev = cleaned_text[-1]
+            if text == prev:
+                continue
+            if len(prev) >= 2 and text.startswith(prev) and len(text) > len(prev):
+                remain = text[len(prev):].strip("，。！？、 ")
+                if not _keep_caption(remain):
+                    continue
+                text = remain
+            else:
+                overlap = _partial_overlap(prev, text)
+                if overlap:
+                    remain = text[overlap:].strip("，。！？、 ")
+                    if not remain or remain == prev or not _keep_caption(remain):
+                        continue
+                    text = remain
+            if text == prev:
+                continue
+        cleaned_text.append(text)
+        cleaned_owners.append(owner)
+
+    result: list[SubtitleSegment] = []
+    for text, owner in zip(cleaned_text, cleaned_owners):
+        result.append(SubtitleSegment(start=owner.start, end=owner.end, text=text))
+    return result
+
+
+def _keep_caption(text: str) -> bool:
+    """A leftover is still a caption when it is a short masked word such as 爆C."""
+    text = (text or "").strip()
+    if text_is_subtitle(text):
+        return True
+    return cjk_count(text) >= 1 and len(text) >= 2
+
+
 def text_is_subtitle(text: str) -> bool:
     if cjk_count(text) >= 2:
         return True
@@ -196,15 +263,30 @@ def _interval_for(video_path: Path, interval: float) -> float:
 def _get_engine():
     global _ENGINE
     if _ENGINE is None:
-        try:
-            from rapidocr_onnxruntime import RapidOCR
-        except ImportError as exc:
-            raise OCRUnavailable(
-                "Burned-in subtitle OCR needs rapidocr-onnxruntime. "
-                "Install with: pip install 'rapidocr-onnxruntime>=1.3.24'"
-            ) from exc
-        _ENGINE = RapidOCR()
+        _ENGINE = _load_engine()
     return _ENGINE
+
+
+def _load_engine():
+    """Prefer RapidOCR 3.x (Python 3.13) and fall back to rapidocr-onnxruntime."""
+    errors: list[str] = []
+    try:
+        from rapidocr import RapidOCR
+        # v3 logs model paths at INFO on first load; keep the CLI quiet.
+        return RapidOCR(params={"Global.log_level": "error"})
+    except ImportError as exc:
+        errors.append(str(exc))
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        return RapidOCR()
+    except ImportError as exc:
+        errors.append(str(exc))
+    detail = "; ".join(errors) or "neither package is installed"
+    raise OCRUnavailable(
+        "Burned-in subtitle OCR needs rapidocr (Python 3.8–3.13). "
+        "Install with: pip install 'rapidocr>=3.0' 'onnxruntime>=1.16'. "
+        f"Details: {detail}"
+    )
 
 
 def _ocr_image(engine, image_path: Path) -> str:
@@ -212,8 +294,79 @@ def _ocr_image(engine, image_path: Path) -> str:
         output = engine(str(image_path))
     except Exception:
         return ""
-    result = output[0] if isinstance(output, tuple) else output
-    return pick_ocr_text(result)
+    return pick_ocr_text(rows_from_ocr_output(output))
+
+
+def rows_from_ocr_output(output) -> list:
+    """Normalize RapidOCR 3 objects and the older ``(rows, elapsed)`` tuple."""
+    if output is None:
+        return []
+    if isinstance(output, tuple):
+        output = output[0]
+    txts = getattr(output, "txts", None)
+    if txts:
+        boxes = getattr(output, "boxes", None)
+        scores = getattr(output, "scores", None)
+        rows = []
+        for index, text in enumerate(txts):
+            box = boxes[index] if boxes is not None and index < len(boxes) else [[0, 0]] * 4
+            score = float(scores[index]) if scores is not None and index < len(scores) else 1.0
+            rows.append([box, text, score])
+        return rows
+    if isinstance(output, list):
+        return output
+    return []
+
+
+def _restore_finance_masks(segments: list[SubtitleSegment], config: AppConfig) -> list[SubtitleSegment]:
+    if not getattr(config.asr, "unmask_finance", True):
+        return segments
+    from .finance_unmask import parse_unmask_extra, restore_masked_terms
+
+    extra = parse_unmask_extra(getattr(config.asr, "unmask_extra", "") or "")
+    restored: list[SubtitleSegment] = []
+    for segment in segments:
+        text = restore_masked_terms(segment.text, extra)
+        if not text:
+            continue
+        restored.append(SubtitleSegment(start=segment.start, end=segment.end, text=text))
+    return restored
+
+
+def _prefer_caption(current: str, new: str) -> str:
+    """Keep a completed OCR line, but not a one-letter bleed from the previous caption."""
+    if len(current) == len(new):
+        return current
+    longer, shorter = (current, new) if len(current) > len(new) else (new, current)
+    if longer.endswith(shorter) and not longer.startswith(shorter):
+        prefix = longer[: len(longer) - len(shorter)]
+        if (
+            len(prefix) == 1
+            and prefix.isascii()
+            and prefix.isalpha()
+            and (cjk_count(current) or cjk_count(new))
+        ):
+            return shorter
+    return longer
+
+
+def _partial_overlap(prev: str, curr: str) -> int:
+    """Suffix of ``prev`` copied onto the front of ``curr`` during a caption change."""
+    max_n = min(len(prev), max(len(curr) - 1, 0))
+    best = 0
+    for size in range(1, max_n + 1):
+        if curr.startswith(prev[-size:]):
+            best = size
+    if best >= 2:
+        return best
+    if (
+        best == 1
+        and prev[-1].isascii()
+        and prev[-1].isalpha()
+        and (cjk_count(prev) or cjk_count(curr))
+    ):
+        return 1
+    return 0
 
 
 def pick_ocr_text(result) -> str:
@@ -259,7 +412,7 @@ def _similar(left: str, right: str) -> bool:
     if a == b:
         return True
     shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    if len(shorter) >= 4 and shorter in longer and len(shorter) / len(longer) >= 0.6:
+    if len(shorter) >= 4 and shorter in longer and len(shorter) / len(longer) >= 0.75:
         return True
     return SequenceMatcher(None, a, b).ratio() >= 0.86
 

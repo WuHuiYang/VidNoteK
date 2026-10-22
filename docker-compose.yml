@@ -11,6 +11,8 @@ services:
       - BILIBILI_SESSDATA=${BILIBILI_SESSDATA:-}
       - NOTEKING_SUBTITLE_MODE=${NOTEKING_SUBTITLE_MODE:-auto}
       - NOTEKING_CHROME=${NOTEKING_CHROME:-}
+      - NOTEKING_UNMASK=${NOTEKING_UNMASK:-1}
+      - NOTEKING_UNMASK_EXTRA=${NOTEKING_UNMASK_EXTRA:-}
     volumes:
       - noteking_cache:/app/.noteking/cache
       - noteking_output:/app/noteking_output
