@@ -190,5 +190,5 @@ def get_transcript(
 
     parsed = parse_link(url)
     work_dir = Path(tempfile.mkdtemp(prefix="noteking_"))
-    subtitles = extract_subtitles(parsed, work_dir, config)
+    subtitles = extract_subtitles(parsed, work_dir, config, skip_asr=False)
     return subtitles.full_text

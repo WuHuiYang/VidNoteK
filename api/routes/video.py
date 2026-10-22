@@ -18,34 +18,27 @@ from api.models.schemas import (
     VideoRequest, VideoResponse, BatchRequest, BatchResponse,
     TemplateInfo, ErrorResponse,
 )
-from core.config import AppConfig, LLMConfig
+from core.config import AppConfig, apply_env
 from core import summarize
 from core.templates import TEMPLATE_LIST
 
 router = APIRouter(prefix="/api/v1", tags=["video"])
 
 
-def _load_config() -> AppConfig:
+def _load_config(require_llm: bool = True) -> AppConfig:
     """Load config from environment variables (called on each request)."""
-    cfg = AppConfig()
-    if os.environ.get("NOTEKING_LLM_API_KEY"):
-        cfg.llm.api_key = os.environ["NOTEKING_LLM_API_KEY"]
-    if os.environ.get("NOTEKING_LLM_BASE_URL"):
-        cfg.llm.base_url = os.environ["NOTEKING_LLM_BASE_URL"]
-    if os.environ.get("NOTEKING_LLM_MODEL"):
-        cfg.llm.model = os.environ["NOTEKING_LLM_MODEL"]
-    if os.environ.get("BILIBILI_SESSDATA"):
-        cfg.bilibili_sessdata = os.environ["BILIBILI_SESSDATA"]
-    if os.environ.get("NOTEKING_PROXY"):
-        cfg.proxy.enabled = True
-        cfg.proxy.http = os.environ["NOTEKING_PROXY"]
-        cfg.proxy.https = os.environ["NOTEKING_PROXY"]
-    if not cfg.llm.api_key:
+    cfg = apply_env(AppConfig())
+    if require_llm and not cfg.llm.api_key:
         raise RuntimeError(
             "No LLM API key configured. Set it via config file, "
             "environment variable NOTEKING_LLM_API_KEY, or --api-key flag."
         )
     return cfg
+
+
+def _apply_subtitle_mode(cfg: AppConfig, mode: str) -> None:
+    if mode:
+        cfg.asr.subtitle_mode = mode
 
 
 def _sse_event(stage: str, **kwargs) -> str:
@@ -58,6 +51,7 @@ async def summarize_video(req: VideoRequest):
     """Process a single video and generate notes."""
     try:
         cfg = _load_config()
+        _apply_subtitle_mode(cfg, req.subtitle_mode)
         result = summarize(
             url=req.url,
             template=req.template,
@@ -86,6 +80,7 @@ async def summarize_video_stream(req: VideoRequest):
     def generate() -> Generator[str, None, None]:
         try:
             cfg = _load_config()
+            _apply_subtitle_mode(cfg, req.subtitle_mode)
 
             yield _sse_event("info", message="正在获取视频信息...")
             from core.parser import parse_link, Platform, is_batch
@@ -151,6 +146,14 @@ async def summarize_video_stream(req: VideoRequest):
                     # 每个片段：只下载时间点前后 8 秒
                     seg_len = 8
 
+                    local_video = None
+                    if parsed.platform in (Platform.LOCAL, Platform.DOUYIN):
+                        try:
+                            from core.downloader import materialize_video
+                            local_video = materialize_video(parsed.url, work_dir, cfg)
+                        except Exception as dl_err:
+                            yield _sse_event("info", message=f"视频文件准备失败: {dl_err}")
+
                     proxy = (
                         cfg.proxy.for_ytdlp
                         or _os.environ.get("NOTEKING_PROXY")
@@ -174,6 +177,35 @@ async def summarize_video_stream(req: VideoRequest):
 
                         seg_path = frames_dir / f"seg_{i:02d}.mp4"
                         frame_path = frames_dir / f"frame_{i:02d}.jpg"
+
+                        if local_video:
+                            ffmpeg_cmd = [
+                                "ffmpeg", "-y",
+                                "-ss", f"{ts:.2f}",
+                                "-i", str(local_video),
+                                "-frames:v", "1",
+                                "-q:v", "3",
+                                "-vf", "scale=960:-2",
+                                str(frame_path),
+                            ]
+                            try:
+                                _sp.run(ffmpeg_cmd, capture_output=True, timeout=30)
+                            except Exception:
+                                pass
+                            if frame_path.exists():
+                                frames_b64[f"frame_{i:02d}.jpg"] = base64.b64encode(
+                                    frame_path.read_bytes()
+                                ).decode()
+                                frames_info.append({
+                                    "name": f"frame_{i:02d}.jpg",
+                                    "ts": ts,
+                                    "ts_str": ts_str,
+                                })
+                                yield _sse_event(
+                                    "info",
+                                    message=f"截图 {len(frames_info)}/{num_frames} 完成（{ts_str}）",
+                                )
+                            continue
 
                         # 下载片段
                         dl_cmd = ["yt-dlp"] + (
@@ -319,7 +351,7 @@ async def get_video_info_endpoint(url: str):
     """Get video metadata without processing."""
     from core.downloader import get_video_info as fetch_info
     try:
-        cfg = _load_config()
+        cfg = _load_config(require_llm=False)
         meta = fetch_info(url, cfg)
         return {
             "title": meta.title,
@@ -336,11 +368,12 @@ async def get_video_info_endpoint(url: str):
 
 
 @router.get("/transcript")
-async def get_transcript(url: str):
+async def get_transcript(url: str, subtitle_mode: str = ""):
     """Get only the transcript text."""
     from core import get_transcript as fetch_transcript
     try:
-        cfg = _load_config()
+        cfg = _load_config(require_llm=False)
+        _apply_subtitle_mode(cfg, subtitle_mode)
         text = fetch_transcript(url, cfg)
         return {"url": url, "transcript": text}
     except Exception as e:

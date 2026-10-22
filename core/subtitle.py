@@ -1,4 +1,4 @@
-"""Subtitle extraction with three-level fallback: CC -> ASR -> Visual."""
+"""Subtitle extraction: captions, burned-in OCR, then speech-to-text."""
 
 from __future__ import annotations
 
@@ -192,40 +192,110 @@ def _try_asr(
     return None
 
 
+def _subtitle_mode(config: AppConfig) -> str:
+    mode = (getattr(config.asr, "subtitle_mode", None) or "auto").strip().lower()
+    if mode not in {"auto", "cc", "asr", "ocr"}:
+        return "auto"
+    return mode
+
+
+def _from_local_file(
+    video_path: Path,
+    work_dir: Path,
+    config: AppConfig,
+    mode: str,
+    skip_asr: bool,
+) -> SubtitleResult:
+    """OCR burned-in captions and/or transcribe a file that is already local."""
+    from .ffmpeg_util import extract_wav, has_video_stream
+    from .ocr_subtitle import (
+        OCRUnavailable,
+        burned_in_subtitles_likely,
+        ocr_available,
+        ocr_burned_subtitles,
+    )
+
+    if not video_path.exists():
+        raise FileNotFoundError(str(video_path))
+
+    use_ocr = mode == "ocr" or (
+        mode == "auto" and has_video_stream(video_path) and ocr_available()
+    )
+    if use_ocr and mode == "auto":
+        try:
+            use_ocr = burned_in_subtitles_likely(video_path, config)
+        except OCRUnavailable:
+            use_ocr = False
+    if use_ocr:
+        try:
+            result = ocr_burned_subtitles(video_path, config, work_dir)
+            if mode == "ocr" or result.segments:
+                return result
+        except OCRUnavailable:
+            if mode == "ocr":
+                raise
+        except Exception:
+            if mode == "ocr":
+                raise
+
+    if mode != "ocr" and not skip_asr:
+        wav_path = extract_wav(video_path, work_dir / "audio.wav")
+        from .transcriber import transcribe
+        return transcribe(wav_path, config)
+    return SubtitleResult(segments=[], source="visual")
+
+
 def extract_subtitles(
     parsed: ParsedLink,
     work_dir: Path,
     config: AppConfig,
     skip_asr: bool = True,
 ) -> SubtitleResult:
-    """Three-level subtitle extraction fallback.
+    """Subtitle fallback.
 
-    Priority 1: Platform CC subtitles (API or yt-dlp)
-    Priority 2: ASR speech-to-text (only if skip_asr=False)
-    Priority 3: Empty result (visual mode deferred to LLM with metadata)
+    Priority 1: platform captions (YouTube API or yt-dlp). Douyin is skipped
+    here because yt-dlp cannot fetch it without fresh cookies.
+    Priority 2: OCR of burned-in captions when ``subtitle_mode`` is ``ocr``,
+    or ``auto`` and a few frames already contain caption text.
+    Priority 3: speech-to-text, unless ``skip_asr`` is set.
+    Priority 4: empty visual result.
     """
+    mode = _subtitle_mode(config)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
     if parsed.platform == Platform.LOCAL:
-        if not skip_asr:
-            result = _try_asr(parsed, work_dir, config)
+        return _from_local_file(Path(parsed.url), work_dir, config, mode, skip_asr)
+
+    if mode in {"auto", "cc"}:
+        result = _try_youtube_transcript_api(parsed, config)
+        if result:
+            return result
+        # Douyin captions are burned in; yt-dlp fails closed without cookies.
+        if parsed.platform != Platform.DOUYIN:
+            result = _try_ytdlp_subtitles(parsed, work_dir, config)
             if result:
                 return result
+
+    if mode == "cc":
         return SubtitleResult(segments=[], source="visual")
 
-    # Level 1: CC subtitles via YouTube Transcript API
-    result = _try_youtube_transcript_api(parsed, config)
-    if result:
-        return result
+    if mode == "asr":
+        if skip_asr:
+            return SubtitleResult(segments=[], source="visual")
+        result = _try_asr(parsed, work_dir, config)
+        if result:
+            return result
+        return SubtitleResult(segments=[], source="visual")
 
-    # Level 1b: CC subtitles via yt-dlp
-    result = _try_ytdlp_subtitles(parsed, work_dir, config)
-    if result:
-        return result
+    # auto or ocr: Douyin (and explicit OCR) need the media file first.
+    if parsed.platform == Platform.DOUYIN or mode == "ocr":
+        from .downloader import materialize_video
+        video_path = materialize_video(parsed.url, work_dir, config)
+        return _from_local_file(video_path, work_dir, config, mode, skip_asr)
 
-    # Level 2: ASR（默认跳过，避免长视频下载超时）
-    if not skip_asr:
+    if mode == "auto" and not skip_asr:
         result = _try_asr(parsed, work_dir, config)
         if result:
             return result
 
-    # Level 3: Visual mode
     return SubtitleResult(segments=[], source="visual")

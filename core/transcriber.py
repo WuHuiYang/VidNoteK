@@ -34,6 +34,8 @@ class FasterWhisperEngine(ASREngine):
 
     def _get_model(self):
         if self._model is None:
+            from .av_compat import install_av_open_compat
+            install_av_open_compat()
             from faster_whisper import WhisperModel
             self._model = WhisperModel(
                 self.model_size, device="auto", compute_type="auto"
