@@ -9,6 +9,8 @@ services:
       - NOTEKING_LLM_MODEL=${NOTEKING_LLM_MODEL:-gpt-4o-mini}
       - NOTEKING_PROXY=${NOTEKING_PROXY:-}
       - BILIBILI_SESSDATA=${BILIBILI_SESSDATA:-}
+      - NOTEKING_SUBTITLE_MODE=${NOTEKING_SUBTITLE_MODE:-auto}
+      - NOTEKING_CHROME=${NOTEKING_CHROME:-}
     volumes:
       - noteking_cache:/app/.noteking/cache
       - noteking_output:/app/noteking_output

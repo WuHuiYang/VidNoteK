@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Generator
 
 from .config import AppConfig
+from .douyin import download_douyin_video, fetch_douyin_media, is_douyin_url
+from .ffmpeg_util import extract_wav, ffprobe_duration
+from .parser import local_path_or_none
 
 
 @dataclass
@@ -71,7 +74,28 @@ def _base_cmd(config: AppConfig) -> list[str]:
 
 
 def get_video_info(url: str, config: AppConfig) -> VideoMeta:
-    """Fetch metadata without downloading."""
+    """Fetch metadata without downloading the media bytes."""
+    local = local_path_or_none(url)
+    if local is not None:
+        path = Path(local)
+        if not path.exists():
+            raise FileNotFoundError(local)
+        return VideoMeta(
+            title=path.stem,
+            webpage_url=str(path),
+            duration=ffprobe_duration(path),
+        )
+    if is_douyin_url(url):
+        media = fetch_douyin_media(url)
+        return VideoMeta(
+            title=media.title,
+            description=media.description,
+            duration=media.duration,
+            uploader=media.uploader,
+            thumbnail=media.thumbnail,
+            webpage_url=media.webpage_url,
+            extra={"id": media.video_id},
+        )
     cmd = _base_cmd(config) + [
         "--dump-json",
         "--flat-playlist",
@@ -119,6 +143,8 @@ def download_subtitles(
 ) -> list[Path]:
     """Download subtitles using yt-dlp."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    if is_douyin_url(url) or local_path_or_none(url) is not None:
+        return []
     cmd = _base_cmd(config) + [
         "--write-subs",
         "--write-auto-subs",
@@ -139,6 +165,15 @@ def download_audio(
 ) -> Path:
     """Extract audio from video for ASR."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    local = local_path_or_none(url)
+    if local is not None:
+        path = Path(local)
+        if not path.exists():
+            raise FileNotFoundError(local)
+        return extract_wav(path, output_dir / "audio.wav")
+    if is_douyin_url(url):
+        video_path, _media = download_douyin_video(url, output_dir)
+        return extract_wav(video_path, output_dir / "audio.wav")
     output_path = output_dir / "audio.wav"
     cmd = _base_cmd(config) + [
         "-x",
@@ -163,8 +198,17 @@ def download_video(
     config: AppConfig,
     quality: str = "best",
 ) -> Path:
-    """Download video file."""
+    """Download video file. Douyin and local paths bypass yt-dlp."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    local = local_path_or_none(url)
+    if local is not None:
+        path = Path(local)
+        if not path.exists():
+            raise FileNotFoundError(local)
+        return path
+    if is_douyin_url(url):
+        video_path, _media = download_douyin_video(url, output_dir)
+        return video_path
     cmd = _base_cmd(config) + [
         "-f", quality,
         "-o", str(output_dir / "%(title)s.%(ext)s"),
@@ -201,6 +245,11 @@ def download_thumbnail(
         if thumbs:
             return thumbs[0]
     return None
+
+
+def materialize_video(url: str, output_dir: Path, config: AppConfig) -> Path:
+    """Return a local video file for a local path or a Douyin URL."""
+    return download_video(url, output_dir, config)
 
 
 def list_playlist_entries(url: str, config: AppConfig) -> list[dict]:
