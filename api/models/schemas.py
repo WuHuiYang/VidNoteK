@@ -10,6 +10,10 @@ class VideoRequest(BaseModel):
     template: str = Field("detailed", description="Output template name")
     custom_prompt: str = Field("", description="Custom prompt for 'custom' template")
     use_cache: bool = Field(True, description="Use cached results if available")
+    subtitle_mode: str = Field(
+        "",
+        description="auto, cc, asr, or ocr. Empty uses NOTEKING_SUBTITLE_MODE or auto.",
+    )
 
 
 class BatchRequest(BaseModel):

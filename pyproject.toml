@@ -34,11 +34,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-asr = ["faster-whisper>=1.0.0"]
+asr = ["faster-whisper>=1.0.0", "av>=12,<16"]
 api = ["fastapi>=0.115.0", "uvicorn[standard]>=0.30.0", "websockets>=13.0"]
 frames = ["scenedetect[opencv]>=0.6"]
 pdf = ["weasyprint>=62.0"]
-all = ["noteking[asr,api,frames,pdf]"]
+ocr = ["rapidocr-onnxruntime>=1.3.24", "pillow>=10.0"]
+douyin = ["playwright>=1.40"]
+all = ["vidnotek[asr,api,frames,pdf,ocr,douyin]"]
 
 [project.scripts]
 noteking = "cli.__main__:main"

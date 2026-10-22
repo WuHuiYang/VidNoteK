@@ -79,11 +79,15 @@ def _clean_url(url: str) -> str:
     例如：
     - 输入: https://www.bilibili.com/video/BV1xx?param1=value1&param2=value2
     - 输出: https://www.bilibili.com/video/BV1xx
+
+    只处理 http(s) 链接。本地路径没有 scheme，原样返回，避免变成 ``:///...``。
     """
     from urllib.parse import urlparse, parse_qs
 
     try:
         parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return url
 
         # 移除常见的跟踪参数
         tracking_params = {
@@ -113,22 +117,52 @@ def _clean_url(url: str) -> str:
 
 
 
+def local_path_or_none(value: str) -> str | None:
+    """Return a filesystem path when ``value`` is a local file, else None.
+
+    Absolute paths, ``./`` and ``../`` paths, ``~/`` paths, and ``file://``
+    URLs are recognized before any URL rewriting. The path is returned even
+    when it does not exist yet, so the caller can report a missing file
+    instead of sending ``:///...`` to yt-dlp.
+    """
+    import os
+    from urllib.parse import unquote
+
+    text = value.strip().strip('"').strip("'")
+    if not text:
+        return None
+    if text.startswith("file://"):
+        path = unquote(urlparse(text).path)
+        return os.path.abspath(path) if path else None
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", text):
+        return None
+    expanded = os.path.expanduser(text)
+    if os.path.isdir(expanded):
+        return None
+    if os.path.isfile(expanded):
+        return os.path.abspath(expanded)
+    if text.startswith(("/", "./", "../", "~")) or re.match(r"^[A-Za-z]:[\\/]", text):
+        return os.path.abspath(expanded)
+    return None
+
+
 def parse_link(url: str) -> ParsedLink:
     """Parse a URL or local file path into a structured ParsedLink."""
     import os
 
-    stripped = url.strip()
+    stripped = url.strip().strip('"').strip("'")
+
+    local = local_path_or_none(stripped)
+    if local is not None:
+        return ParsedLink(
+            url=local,
+            platform=Platform.LOCAL,
+            link_type=LinkType.LOCAL_FILE,
+            video_id=os.path.basename(local),
+        )
 
     # 清理URL：移除跟踪参数，只保留核心部分
     stripped = _clean_url(stripped)
-
-    if os.path.exists(stripped):
-        return ParsedLink(
-            url=stripped,
-            platform=Platform.LOCAL,
-            link_type=LinkType.LOCAL_FILE,
-            video_id=os.path.basename(stripped),
-        )
 
     for pattern, link_type in _BILIBILI_PATTERNS:
         m = re.search(pattern, stripped)
@@ -164,10 +198,15 @@ def parse_link(url: str) -> ParsedLink:
             )
 
     platform = _guess_platform(stripped)
+    video_id = ""
+    if platform == Platform.DOUYIN:
+        from .douyin import extract_video_id
+        video_id = extract_video_id(stripped)
     return ParsedLink(
         url=stripped,
         platform=platform,
         link_type=LinkType.SINGLE,
+        video_id=video_id,
     )
 
 
