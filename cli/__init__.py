@@ -1,0 +1,1 @@
+"""VidNoteK command-line interface."""

@@ -50,6 +50,12 @@ class ASRConfig:
     volcengine_app_id: str = ""
     volcengine_token: str = ""
     deepgram_api_key: str = ""
+    # auto: captions, then burned-in OCR when it looks useful, then ASR
+    # cc: platform captions only; asr: speech-to-text only; ocr: burned-in text only
+    subtitle_mode: str = "auto"
+    ocr_interval: float = 0.5
+    # 0 = choose the caption band from the aspect ratio; >0 = bottom fraction
+    ocr_bottom_ratio: float = 0.0
 
 
 @dataclass
@@ -85,10 +91,10 @@ class AppConfig:
         if not path.exists():
             cfg = cls()
             cfg.save(path)
-            return cfg
+            return apply_env(cfg)
         try:
             data = json.loads(path.read_text())
-            return cls(
+            return apply_env(cls(
                 proxy=ProxyConfig(**data.get("proxy", {})),
                 asr=ASRConfig(**data.get("asr", {})),
                 llm=LLMConfig(**data.get("llm", {})),
@@ -97,9 +103,44 @@ class AppConfig:
                 bilibili_sessdata=data.get("bilibili_sessdata", ""),
                 default_template=data.get("default_template", "detailed"),
                 max_concurrent_downloads=data.get("max_concurrent_downloads", 3),
-            )
+            ))
         except Exception:
-            return cls()
+            return apply_env(cls())
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def apply_env(cfg: "AppConfig") -> "AppConfig":
+    """Overlay environment variables onto a config object. No secrets are written."""
+    import os
+
+    if os.environ.get("NOTEKING_LLM_API_KEY"):
+        cfg.llm.api_key = os.environ["NOTEKING_LLM_API_KEY"]
+    if os.environ.get("NOTEKING_LLM_BASE_URL"):
+        cfg.llm.base_url = os.environ["NOTEKING_LLM_BASE_URL"]
+    if os.environ.get("NOTEKING_LLM_MODEL"):
+        cfg.llm.model = os.environ["NOTEKING_LLM_MODEL"]
+    if os.environ.get("BILIBILI_SESSDATA"):
+        cfg.bilibili_sessdata = os.environ["BILIBILI_SESSDATA"]
+    if os.environ.get("NOTEKING_PROXY"):
+        cfg.proxy.enabled = True
+        cfg.proxy.http = os.environ["NOTEKING_PROXY"]
+        cfg.proxy.https = os.environ["NOTEKING_PROXY"]
+    if os.environ.get("NOTEKING_SUBTITLE_MODE"):
+        cfg.asr.subtitle_mode = os.environ["NOTEKING_SUBTITLE_MODE"]
+    if os.environ.get("NOTEKING_ASR_ENGINE"):
+        cfg.asr.default_engine = os.environ["NOTEKING_ASR_ENGINE"]
+    if os.environ.get("NOTEKING_ASR_MODEL"):
+        cfg.asr.faster_whisper_model = os.environ["NOTEKING_ASR_MODEL"]
+    if os.environ.get("NOTEKING_OCR_INTERVAL"):
+        try:
+            cfg.asr.ocr_interval = float(os.environ["NOTEKING_OCR_INTERVAL"])
+        except ValueError:
+            pass
+    if os.environ.get("NOTEKING_OCR_BOTTOM_RATIO"):
+        try:
+            cfg.asr.ocr_bottom_ratio = float(os.environ["NOTEKING_OCR_BOTTOM_RATIO"])
+        except ValueError:
+            pass
+    return cfg

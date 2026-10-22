@@ -31,7 +31,7 @@
 | 📚 13 种输出模板 | 详细笔记、简要总结、思维导图、闪卡、测验题、考试复习、时间线…… |
 | 🌍 30+ 平台支持 | B站、YouTube、抖音、小红书、快手、TikTok、Twitter 等 |
 | 🔄 批量处理 | 整个课程合集（比如 26 集的课）一键全部处理 |
-| 🔁 字幕三级回退 | 平台字幕 → Whisper ASR → 纯视觉模式 |
+| 🔁 字幕回退 | 平台字幕 → 烧录字幕 OCR → 语音识别 → 纯视觉模式 |
 
 ---
 
@@ -186,6 +186,26 @@ docker compose up -d
 # 打开浏览器访问 http://localhost:3000
 ```
 
+### 命令行
+
+```bash
+pip install -e ".[douyin,ocr,asr]"
+python -m playwright install chromium   # 已安装 Google Chrome 时可跳过
+
+# 抖音短链或 www.douyin.com/video/<id>，无需登录
+python -m cli "https://v.douyin.com/fnnhAB4lkq8/" --transcript-only -o transcript.txt
+
+# 烧录字幕（抖音常见）走 OCR；语音识别用 --subtitle-mode asr
+python -m cli "https://www.douyin.com/video/7694957011309432099" --subtitle-mode ocr --transcript-only -o transcript.txt
+
+# 本地文件同样可用。生成笔记需要 NOTEKING_LLM_API_KEY
+python -m cli ./video.mp4 -t brief -o notes.md
+```
+
+抖音不走 yt-dlp（公开视频也会报 fresh cookies）。程序用无头浏览器打开 `jingxuan?modal_id=<视频ID>`，从页面里的直链下载 mp4。短链会先重定向到 `iesdouyin.com/share/video/<id>/`。
+
+语音识别依赖 faster-whisper 时，PyAV 必须低于 16（`av>=12,<16`，已写在 `asr` 依赖里）。PyAV 16 去掉了 `av.open(metadata_errors=...)`，faster-whisper 会直接报错；代码里也做了兼容，但安装时仍应钉住 `av<16`。
+
 ### 腾讯云部署
 
 详细部署指南请参考：[DEPLOY_TENCENT.md](DEPLOY_TENCENT.md)
@@ -218,7 +238,7 @@ docker compose up -d
 |------|------|----------|
 | **哔哩哔哩** | ✅ 完整支持 | 单视频、合集、多P、SESSDATA高清 |
 | **YouTube** | ✅ 完整支持 | 单视频、播放列表、频道（支持代理翻墙） |
-| **抖音** | ✅ 支持 | 短视频 |
+| **抖音** | ✅ 支持 | 短链和视频页，无需登录；烧录字幕可 OCR |
 | **小红书** | ✅ 支持 | 自动解析短链接 |
 | **快手** | ✅ 支持 | 短视频 |
 | **TikTok** | ✅ 支持 | 国际版 |
@@ -234,9 +254,12 @@ vidnotek/
     __init__.py      # 主流水线：summarize()
     config.py        # 配置管理
     parser.py        # URL 解析（30+ 平台）
-    downloader.py    # yt-dlp 下载器
-    subtitle.py      # 字幕三级回退
+    downloader.py    # yt-dlp；抖音走无头浏览器直链
+    douyin.py        # 抖音解析与下载（无需登录）
+    ocr_subtitle.py  # 烧录字幕 OCR
+    subtitle.py      # 字幕 → OCR → 语音识别
     transcriber.py   # ASR 语音识别引擎
+  cli/               # python -m cli
     frames.py        # 智能关键帧提取
     pdf_engine.py    # PDF 生成引擎
     llm.py           # LLM 接口（兼容 OpenAI）
