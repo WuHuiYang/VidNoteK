@@ -45,6 +45,16 @@ def main() -> None:
 @click.option("--api-key", default=None, help="LLM API key. Overrides NOTEKING_LLM_API_KEY.")
 @click.option("--base-url", default=None, help="OpenAI-compatible API base URL.")
 @click.option("--model", default=None, help="LLM model name.")
+@click.option(
+    "--no-unmask",
+    is_flag=True,
+    help="Keep Douyin letter masks (爆C, L润) instead of restoring finance words.",
+)
+@click.option(
+    "--unmask-extra",
+    default=None,
+    help="Extra mask pairs, for example 'Q亏=全亏,建C=建仓'. Overrides the built-in table.",
+)
 def cli(
     url: str,
     template: str,
@@ -54,6 +64,8 @@ def cli(
     api_key: str | None,
     base_url: str | None,
     model: str | None,
+    no_unmask: bool,
+    unmask_extra: str | None,
 ) -> None:
     """Turn a video link or local file into a transcript or notes."""
     config = apply_env(AppConfig())
@@ -65,6 +77,10 @@ def cli(
         config.llm.base_url = base_url
     if model:
         config.llm.model = model
+    if no_unmask:
+        config.asr.unmask_finance = False
+    if unmask_extra is not None:
+        config.asr.unmask_extra = unmask_extra
 
     if transcript_only:
         path = _write_transcript(url, config, output)
@@ -111,7 +127,7 @@ def _write_transcript(url: str, config: AppConfig, output: str) -> Path:
     if not subtitles.full_text.strip():
         raise click.ClickException(
             "No transcript produced. For burned-in captions install "
-            "rapidocr-onnxruntime and pass --subtitle-mode ocr. "
+            "rapidocr and onnxruntime, then pass --subtitle-mode ocr. "
             "For speech-to-text install faster-whisper (av<16) or set an ASR API key."
         )
 
@@ -122,20 +138,20 @@ def _write_transcript(url: str, config: AppConfig, output: str) -> Path:
         text_path = exact_file.with_suffix(".txt")
         subtitles.save_srt(exact_file)
         subtitles.save_txt(text_path)
-        click.echo(
-            f"{len(subtitles.segments)} lines via {subtitles.source}",
-            err=True,
-        )
+        click.echo(_line_message(text_path, subtitles.source), err=True)
         return exact_file
 
     text_path.parent.mkdir(parents=True, exist_ok=True)
     subtitles.save_txt(text_path)
     subtitles.save_srt(text_path.with_suffix(".srt"))
-    click.echo(
-        f"{len(subtitles.segments)} lines via {subtitles.source}",
-        err=True,
-    )
+    click.echo(_line_message(text_path, subtitles.source), err=True)
     return text_path
+
+
+def _line_message(text_path: Path, source: str) -> str:
+    """Count the lines actually written, including the last line without a guess."""
+    count = len(text_path.read_text(encoding="utf-8").splitlines())
+    return f"{count} lines via {source}"
 
 
 def _output_target(output: str) -> tuple[Path, Path | None]:

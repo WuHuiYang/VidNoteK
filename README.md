@@ -189,6 +189,7 @@ docker compose up -d
 ### 命令行
 
 ```bash
+# Python 3.11–3.13。OCR 用 rapidocr 3.x（rapidocr-onnxruntime 不支持 3.13）
 pip install -e ".[douyin,ocr,asr]"
 python -m playwright install chromium   # 已安装 Google Chrome 时可跳过
 
@@ -205,6 +206,8 @@ python -m cli ./video.mp4 -t brief -o notes.md
 抖音不走 yt-dlp（公开视频也会报 fresh cookies）。程序用无头浏览器打开 `jingxuan?modal_id=<视频ID>`，从页面里的直链下载 mp4。短链会先重定向到 `iesdouyin.com/share/video/<id>/`。
 
 语音识别依赖 faster-whisper 时，PyAV 必须低于 16（`av>=12,<16`，已写在 `asr` 依赖里）。PyAV 16 去掉了 `av.open(metadata_errors=...)`，faster-whisper 会直接报错；代码里也做了兼容，但安装时仍应钉住 `av<16`。
+
+烧录字幕里的敏感字经常被换成字母（爆C = 爆仓，建C = 建仓，L润 = 利润，C底 = 抄底，N市 = 牛市，Q亏 = 全亏）。OCR 稿默认按这个财经词表还原。`--no-unmask` 或 `NOTEKING_UNMASK=0` 会关掉；`--unmask-extra '自定义=原词'` 或 `NOTEKING_UNMASK_EXTRA` 可以追加或覆盖词条。词表只替换「一个拉丁字母 + 汉字」的整词，不会动 A股、CEO、C位 这类写法。
 
 ### 腾讯云部署
 
