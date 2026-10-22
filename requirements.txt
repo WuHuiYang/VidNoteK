@@ -14,8 +14,11 @@ websockets>=13.0
 python-dotenv>=1.0.0
 # Douyin public pages are rendered in headless Chromium. No cookies.
 playwright>=1.40
-# Optional burned-in subtitle OCR (Chinese). Imported only when OCR runs.
-rapidocr-onnxruntime>=1.3.24
+# Burned-in subtitle OCR. rapidocr 3.x is a py3 wheel (Python 3.8–3.13).
+# rapidocr-onnxruntime stops at Python 3.12 (Requires-Python <3.13), so it is
+# not installed here. The code still uses it when it is already present.
+rapidocr>=3.0
+onnxruntime>=1.16
 pillow>=10.0
 # faster-whisper calls av.open(metadata_errors=...). PyAV 16 removed that argument.
 av>=12,<16

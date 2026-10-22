@@ -56,6 +56,10 @@ class ASRConfig:
     ocr_interval: float = 0.5
     # 0 = choose the caption band from the aspect ratio; >0 = bottom fraction
     ocr_bottom_ratio: float = 0.0
+    # Restore Douyin letter masks such as 爆C -> 爆仓. Set false to keep OCR text.
+    unmask_finance: bool = True
+    # Extra pairs, "Q亏=全亏,建C=建仓". These override the built-in table.
+    unmask_extra: str = ""
 
 
 @dataclass
@@ -143,4 +147,9 @@ def apply_env(cfg: "AppConfig") -> "AppConfig":
             cfg.asr.ocr_bottom_ratio = float(os.environ["NOTEKING_OCR_BOTTOM_RATIO"])
         except ValueError:
             pass
+    if os.environ.get("NOTEKING_UNMASK"):
+        flag = os.environ["NOTEKING_UNMASK"].strip().lower()
+        cfg.asr.unmask_finance = flag not in {"0", "false", "no", "off"}
+    if os.environ.get("NOTEKING_UNMASK_EXTRA"):
+        cfg.asr.unmask_extra = os.environ["NOTEKING_UNMASK_EXTRA"]
     return cfg
