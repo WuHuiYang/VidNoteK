@@ -59,7 +59,10 @@ class SubtitleResult:
         path.write_text(self.srt_content, encoding="utf-8")
 
     def save_txt(self, path: Path) -> None:
-        path.write_text(self.full_text, encoding="utf-8")
+        text = self.full_text
+        if text and not text.endswith("\n"):
+            text += "\n"
+        path.write_text(text, encoding="utf-8")
 
 
 def _seconds_to_ts(seconds: float) -> str:
