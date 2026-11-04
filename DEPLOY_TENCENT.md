@@ -58,12 +58,14 @@ cd vidnotek
 
 ### **第四步：配置环境变量**
 
+> **不要把密钥提交到 Git。** `NOTEKING_LLM_API_KEY` 只能放在服务器本地的 `.env`（已列入 `.gitignore`）或密钥管理服务（例如腾讯云 SSM、部署平台注入的环境变量）中。不要把真实 Key 写进此文档、提交记录或镜像。`.env.example` 只保留占位符。下面的 `<your-deepseek-api-key>` 不是密钥；部署时在服务器上换成你自己的 DeepSeek API Key，并且不要把填好的 `.env` 提交回仓库。
+
 ```bash
-# 创建 .env 文件
+# 在服务器上创建 .env（只留在本机，不要 git add）
 cat > .env << 'EOF'
 # VidNoteK 环境配置
 
-# LLM API 配置（DeepSeek）
+# LLM API 配置（DeepSeek）—— 用你自己的 Key 替换占位符
 NOTEKING_LLM_API_KEY=<your-deepseek-api-key>
 NOTEKING_LLM_BASE_URL=https://api.deepseek.com
 NOTEKING_LLM_MODEL=deepseek-chat
